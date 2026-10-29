@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-source_path = "~/stu/found_0/data/sz000001.csv"
+source_path = "~/stu/found_0/data/sz300750.csv"
 
 
 def csv_numpy(csv_path: str, col_name: str) -> np.ndarray:
@@ -163,18 +163,18 @@ def found(data: np.ndarray, window_size: list, p: dict):
 
 
 params = {
-    "area_ratio": [3, 9, 1],      # 三段时长比
+    "area_ratio": [3, 8, 2],      # 三段时长比
     "target": [0, 1/3, 1, 0, 0],  # [平盘度, 幅度比, 斜率比, 标准差, 断点高度差]
     "tol": [1.0, 1.0, 1.0, 1.0, 1.0],
     "weight": [1.0, 1.0, 1.0, 1.0, 1.0],
-    "std_weight": [1.0, 1.0, 1.0],  # 三段标准差的权重
+    "std_weight": [1.0, 2.0, 1.0],  # 三段标准差的权重
     "gap_max": 0.5,                 # 断点高度差与 A1 的比值上限
 }
 
 #results = found(test_data, window_size=[10, 12], p=params)
 #print(f"\n合法窗口数 = {len(results)}")
 
-results = found(close_data, window_size=[25, 60], p=params)
+results = found(close_data, window_size=[14, 60], p=params)
 print(f"\n合法窗口数 = {len(results)}")
 
 
@@ -190,60 +190,85 @@ try:
 except ImportError as exc:
     print(f"跳过绘图：{exc}")
 else:
-    sys.path.append("~/stu/math_practice_file/function")
+    # sys.path 不展开 "~"，必须用 Path.home() 拼成绝对路径
+    ##plot_dir，共享绘图函数 plot.py 所在目录
+    plot_dir = Path.home() / "stu" / "math_practice_file" / "function"
+    sys.path.append(str(plot_dir))
     from plot import plot
 
     out_dir = Path(__file__).resolve().parent / "tmp"
     out_dir.mkdir(exist_ok=True)
 
-    top = sorted(results, key=lambda r: r["score"])[:20]
-    print(f"最佳 {len(top)} 个窗口 -> {out_dir}")
+    ##ranked，全部合法结果按分数升序（越小越像）
+    ranked = sorted(results, key=lambda r: r["score"])
 
-    ##result，单个匹配结果
-    for rank, r in enumerate(top, start=1):
-        start, w_size = r["start"], r["w_size"]
-        w = close_data[start:start + w_size]
-        x = np.arange(start, start + w_size)
+    ##group_size，每组多少个窗口
+    ##group_num，抽查的组数
+    ##pick，每组画出前几名
+    group_size, group_num, pick = 20, 10, 3
 
-        _, t1_point, _, _, _ = tau_layout(w_size, params)
+    print(f"合法结果 {len(ranked)} 个，按分数分 {group_num} 组、每组 {group_size} 个，"
+          f"每组画前 {pick} 名 -> {out_dir}")
 
-        # 实际收盘价
-        layers = [
-            {"type": "line", "data": np.column_stack([x, w]),
-             "color": "black", "linestyle": "-", "linewidth": 1},
-        ]
+    for g in range(group_num):
+        ##group_start，本组第一个窗口的全局排名下标
+        group_start = g * group_size
+        group = ranked[group_start:group_start + group_size]
+        if not group:
+            print(f"\n第 {g + 1} 组没有数据，抽查结束")
+            break
 
-        # 三段拟合线
-        segs = [
-            (w[0:r["t1"] + 1], 0, "tab:blue"),
-            (w[r["t1"]:r["t2"] + 1], r["t1"], "tab:orange"),
-            (w[r["t2"]:], r["t2"], "tab:green"),
-        ]
-        for ys, offset, color in segs:
-            xs = np.arange(len(ys))
-            k, b = fit_line(ys)
-            layers.append({
-                "type": "line",
-                "data": np.column_stack([start + offset + xs, k * xs + b]),
-                "color": color,
-                "linestyle": "--",
-                "linewidth": 1.5,
-            })
+        print(f"\n第 {g + 1} 组（总排名 {group_start + 1}-{group_start + len(group)}）：")
 
-        ##figure，图形对象
-        ##axes，坐标轴对象
-        fig, ax = plt.subplots(figsize=(8, 4))
-        title = (f"#{rank} score={r['score']:.3f} | W={w_size} start={start} "
-                 f"t1={r['t1']} t2={r['t2']} | feat={r['feat']}")
-        plot(layers, title=title, ax=ax, show=False)
+        ##r，本组内的单个匹配结果
+        for offset, r in enumerate(group[:pick]):
+            ##rank，该窗口的全局名次
+            rank = group_start + offset + 1
 
-        # 两个断点
-        ##breakpoint，断点坐标
-        for bp in (start + r["t1"], start + r["t2"]):
-            ax.axvline(bp, color="gray", linestyle=":", linewidth=1)
+            start, w_size = r["start"], r["w_size"]
+            w = close_data[start:start + w_size]
+            x = np.arange(start, start + w_size)
 
-        fig.tight_layout()
-        path = out_dir / f"best_{rank:02d}_score_{r['score']:.3f}.png"
-        fig.savefig(path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"  {path.name}")
+            _, t1_point, _, _, _ = tau_layout(w_size, params)
+
+            # 实际收盘价
+            layers = [
+                {"type": "line", "data": np.column_stack([x, w]),
+                 "color": "black", "linestyle": "-", "linewidth": 1},
+            ]
+
+            # 三段拟合线
+            segs = [
+                (w[0:r["t1"] + 1], 0, "tab:blue"),
+                (w[r["t1"]:r["t2"] + 1], r["t1"], "tab:orange"),
+                (w[r["t2"]:], r["t2"], "tab:green"),
+            ]
+            for ys, offset_, color in segs:
+                xs = np.arange(len(ys))
+                k, b = fit_line(ys)
+                layers.append({
+                    "type": "line",
+                    "data": np.column_stack([start + offset_ + xs, k * xs + b]),
+                    "color": color,
+                    "linestyle": "--",
+                    "linewidth": 1.5,
+                })
+
+            ##figure，图形对象
+            ##axes，坐标轴对象
+            fig, ax = plt.subplots(figsize=(8, 6))
+            title = (f"组{g + 1} 第{offset + 1}名（总#{rank}） score={r['score']:.3f} | "
+                     f"W={w_size} start={start} t1={r['t1']} t2={r['t2']}")
+            plot(layers, title=title, ax=ax, show=False)
+
+            # 两个断点
+            ##breakpoint，断点坐标
+            for bp in (start + r["t1"], start + r["t2"]):
+                ax.axvline(bp, color="gray", linestyle=":", linewidth=1)
+
+            fig.tight_layout()
+            path = out_dir / (f"g{g + 1:02d}_top{offset + 1}"
+                              f"_rank{rank:03d}_score_{r['score']:.3f}.png")
+            fig.savefig(path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  {path.name}")
