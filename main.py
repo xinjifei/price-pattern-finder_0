@@ -39,9 +39,11 @@ def score(area_list: list, p: dict):
     A2 = s2 * (len(a_2) - 1)
     A3 = s3 * (len(a_3) - 1)
 
-    # 硬门槛：第一段、第三段必须涨
+    # 硬门槛1：第一段、第三段必须涨
     if A1 <= 0 or A3 <= 0:
         return None
+
+    # 硬门槛
 
     # 三段残差的标准差：数据点离拟合线越远，数值越大
     ##x coordinates，第一段横坐标数组
@@ -104,30 +106,29 @@ def tau_layout(w_size: int, p: dict):
 
 
 def optimal_tau(w: np.ndarray, p: dict):
-    """单窗口内搜两个断点，返回最佳 {'score','t1','t2','feat'}；无合法分段返回 None。"""
+    """单窗口内固定 t2、搜索 t1，返回最佳分段；无合法分段返回 None。"""
     ##window size，当前窗口长度
     w_size = len(w)
-    tau_area, t1_point, _, t1_start, t2_start = tau_layout(w_size, p)
+    tau_area, _, t2_point, t1_start, _ = tau_layout(w_size, p)
 
     best = None
     for i in range(tau_area):
         ##turning point，第一个实际断点
         t1 = t1_start + i
-        for j in range(tau_area):
-            t2 = t2_start + j
+        t2 = t2_point
+        
+        # 边界：t1 < t2，且每段至少 2 个点
+        if not (2 <= t1 < t2 and t2 - t1 >= 2 and w_size - t2 >= 2):
+            continue
 
-            # 边界：t1 < t2，且每段至少 2 个点
-            if not (2 <= t1 < t2 and t2 - t1 >= 2 and w_size - t2 >= 2):
-                continue
+        ##result，当前分段的打分结果
+        res = score([w[0:t1 + 1], w[t1:t2 + 1], w[t2:]], p)
+        if res is None:
+            continue
 
-            ##result，当前分段的打分结果
-            res = score([w[0:t1 + 1], w[t1:t2 + 1], w[t2:]], p)
-            if res is None:
-                continue
-
-            total, feat = res
-            if best is None or total < best["score"]:
-                best = {"score": total, "t1": t1, "t2": t2, "feat": feat}
+        total, feat = res
+        if best is None or total < best["score"]:
+            best = {"score": total, "t1": t1, "t2": t2, "feat": feat}
 
     return best
 
@@ -163,7 +164,7 @@ def found(data: np.ndarray, window_size: list, p: dict):
 
 
 params = {
-    "area_ratio": [3, 8, 2],      # 三段时长比
+    "area_ratio": [3, 6, 2],      # 三段时长比
     "target": [0, 1/3, 1, 0, 0],  # [平盘度, 幅度比, 斜率比, 标准差, 断点高度差]
     "tol": [1.0, 1.0, 1.0, 1.0, 1.0],
     "weight": [1.0, 1.0, 1.0, 1.0, 1.0],
@@ -171,15 +172,14 @@ params = {
     "gap_max": 0.5,                 # 断点高度差与 A1 的比值上限
 }
 
-#results = found(test_data, window_size=[10, 12], p=params)
-#print(f"\n合法窗口数 = {len(results)}")
-
-results = found(close_data, window_size=[14, 60], p=params)
+results = found(close_data, window_size=[20, 60], p=params)
 print(f"\n合法窗口数 = {len(results)}")
 
-
+# 不许改上面的内容
 # ===== 画图：score 最小的 20 个窗口 =====
 from pathlib import Path
+import contextlib
+import io
 import sys
 
 try:
@@ -196,40 +196,40 @@ else:
     sys.path.append(str(plot_dir))
     from plot import plot
 
-    out_dir = Path(__file__).resolve().parent / "tmp"
-    out_dir.mkdir(exist_ok=True)
+    root = Path(__file__).resolve().parent
+    data_dir = root / "data"
+    out_root = root / "tmp"
+    out_root.mkdir(exist_ok=True)
 
-    ##ranked，全部合法结果按分数升序（越小越像）
-    ranked = sorted(results, key=lambda r: r["score"])
+    ##picks，每个股票要画的名次
+    picks = (1, 5, 10)
+    ##stock_files，要扫描和画图的三个股票数据文件
+    stock_files = ("sz000001.csv", "sz000858.csv", "sz300750.csv")
 
-    ##group_size，每组多少个窗口
-    ##group_num，抽查的组数
-    ##pick，每组画出前几名
-    group_size, group_num, pick = 20, 10, 3
+    for filename in stock_files:
+        csv_path = data_dir / filename
+        stock_data = csv_numpy(str(csv_path), "close")
 
-    print(f"合法结果 {len(ranked)} 个，按分数分 {group_num} 组、每组 {group_size} 个，"
-          f"每组画前 {pick} 名 -> {out_dir}")
+        # found 会逐窗口打印，批量跑时屏蔽掉
+        with contextlib.redirect_stdout(io.StringIO()):
+            stock_results = found(stock_data, window_size=[20, 60], p=params)
 
-    for g in range(group_num):
-        ##group_start，本组第一个窗口的全局排名下标
-        group_start = g * group_size
-        group = ranked[group_start:group_start + group_size]
-        if not group:
-            print(f"\n第 {g + 1} 组没有数据，抽查结束")
-            break
+        ##ranked，全部合法结果按分数升序（越小越像）
+        ranked = sorted(stock_results, key=lambda r: r["score"])
+        out_dir = out_root / csv_path.stem
+        out_dir.mkdir(exist_ok=True)
+        print(f"{csv_path.stem}: {len(ranked)} 个合法窗口 -> {out_dir}")
 
-        print(f"\n第 {g + 1} 组（总排名 {group_start + 1}-{group_start + len(group)}）：")
+        for rank in picks:
+            if rank > len(ranked):
+                print(f"  第 {rank} 名不存在（只有 {len(ranked)} 个）")
+                continue
 
-        ##r，本组内的单个匹配结果
-        for offset, r in enumerate(group[:pick]):
-            ##rank，该窗口的全局名次
-            rank = group_start + offset + 1
-
+            ##r，该名次对应的匹配结果
+            r = ranked[rank - 1]
             start, w_size = r["start"], r["w_size"]
-            w = close_data[start:start + w_size]
+            w = stock_data[start:start + w_size]
             x = np.arange(start, start + w_size)
-
-            _, t1_point, _, _, _ = tau_layout(w_size, params)
 
             # 实际收盘价
             layers = [
@@ -257,7 +257,7 @@ else:
             ##figure，图形对象
             ##axes，坐标轴对象
             fig, ax = plt.subplots(figsize=(8, 6))
-            title = (f"组{g + 1} 第{offset + 1}名（总#{rank}） score={r['score']:.3f} | "
+            title = (f"{csv_path.stem} 第{rank}名 score={r['score']:.3f} | "
                      f"W={w_size} start={start} t1={r['t1']} t2={r['t2']}")
             plot(layers, title=title, ax=ax, show=False)
 
@@ -267,8 +267,7 @@ else:
                 ax.axvline(bp, color="gray", linestyle=":", linewidth=1)
 
             fig.tight_layout()
-            path = out_dir / (f"g{g + 1:02d}_top{offset + 1}"
-                              f"_rank{rank:03d}_score_{r['score']:.3f}.png")
+            path = out_dir / f"rank_{rank:02d}_score_{r['score']:.3f}.png"
             fig.savefig(path, dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"  {path.name}")
