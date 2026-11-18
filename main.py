@@ -43,7 +43,19 @@ def score(area_list: list, p: dict):
     if A1 <= 0 or A3 <= 0:
         return None
 
-    # 硬门槛
+    # 门槛2:第三段起始点与第二段终点落差，与第三段拟合线落差之比不得超过maxdrop
+    # 算两个落差
+    drop_0 = ((len(a_2) -1)*s2 + b2) - (b3)
+    drop_1 = ((len(a_3) -1)*s3 + b3) - (b3)
+    max_drop = 0.35
+    if drop_1 / drop_0 >= max_drop:
+        return None
+
+    # 门槛3：第二段终点位置不能低于第一段lower_line
+    lower_line_coef = 0.66
+    lower_line = (b1) + (((len(a_1) -1)*s1+b1) - b1)*lower_line_coef
+    if ((len(a_2) -1)*s2 + b2) < lower_line:
+        return None
 
     # 三段残差的标准差：数据点离拟合线越远，数值越大
     ##x coordinates，第一段横坐标数组
@@ -133,8 +145,30 @@ def optimal_tau(w: np.ndarray, p: dict):
     return best
 
 
+def dedup(results: list, overlap_ratio: float = 0.7):
+    """重叠达到较短窗口指定比例时，只保留分数更低的窗口。"""
+    kept = []
+
+    ##result，按分数从小到大检查的窗口
+    for result in sorted(results, key=lambda r: r["score"]):
+        start = result["start"]
+        end = start + result["w_size"]
+
+        ##saved，已经保留的窗口
+        for saved in kept:
+            saved_start = saved["start"]
+            saved_end = saved_start + saved["w_size"]
+            overlap = max(0, min(end, saved_end) - max(start, saved_start))
+            if overlap >= overlap_ratio * min(result["w_size"], saved["w_size"]):
+                break
+        else:
+            kept.append(result)
+
+    return kept
+
+
 def found(data: np.ndarray, window_size: list, p: dict):
-    """逐窗口滑动，每个窗口留一个最佳分段。"""
+    """逐窗口滑动，每个窗口留一个最佳分段，除重后返回。"""
     day = len(data)
     results = []
 
@@ -159,7 +193,8 @@ def found(data: np.ndarray, window_size: list, p: dict):
             results.append(best)
             print(f"w_nub = {w_nub} | t1 = {best['t1']} ,t2 = {best['t2']} | "
                   f"total = {best['score']:.3f} | feat = {best['feat']}")
-
+    # 除重处理
+    results = dedup(results)
     return results
 
 
@@ -176,7 +211,7 @@ results = found(close_data, window_size=[20, 60], p=params)
 print(f"\n合法窗口数 = {len(results)}")
 
 # 不许改上面的内容
-# ===== 画图：score 最小的 20 个窗口 =====
+# ===== 画图：每只股票的全部合法窗口 =====
 from pathlib import Path
 import contextlib
 import io
@@ -201,8 +236,6 @@ else:
     out_root = root / "tmp"
     out_root.mkdir(exist_ok=True)
 
-    ##picks，每个股票要画的名次
-    picks = (1, 5, 10)
     ##stock_files，要扫描和画图的三个股票数据文件
     stock_files = ("sz000001.csv", "sz000858.csv", "sz300750.csv")
 
@@ -220,13 +253,8 @@ else:
         out_dir.mkdir(exist_ok=True)
         print(f"{csv_path.stem}: {len(ranked)} 个合法窗口 -> {out_dir}")
 
-        for rank in picks:
-            if rank > len(ranked):
-                print(f"  第 {rank} 名不存在（只有 {len(ranked)} 个）")
-                continue
-
-            ##r，该名次对应的匹配结果
-            r = ranked[rank - 1]
+        ##r，该名次对应的匹配结果
+        for rank, r in enumerate(ranked, start=1):
             start, w_size = r["start"], r["w_size"]
             w = stock_data[start:start + w_size]
             x = np.arange(start, start + w_size)
