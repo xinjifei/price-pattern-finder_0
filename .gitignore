@@ -11,3 +11,8 @@ wheels/
 
 # tmp生成的内容
 tmp/
+
+# 脚本生成的分析结果
+analysis/data/
+analysis/*/output/
+check/

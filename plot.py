@@ -10,7 +10,14 @@ import numpy as np
 from finder import csv_numpy, fit_line, found
 
 
-def draw_results(data_dir: Path, out_root: Path, stock_files: tuple, window_size: list, p: dict):
+def draw_results(
+    data_dir: Path,
+    out_root: Path,
+    stock_files: tuple,
+    window_size: list,
+    p: dict,
+    results_by_stock: dict | None = None,
+):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -33,9 +40,12 @@ def draw_results(data_dir: Path, out_root: Path, stock_files: tuple, window_size
         csv_path = data_dir / filename
         stock_data = csv_numpy(str(csv_path), "close")
 
-        # found 会逐窗口打印，批量跑时屏蔽掉
-        with contextlib.redirect_stdout(io.StringIO()):
-            stock_results = found(stock_data, window_size=window_size, p=p)
+        if results_by_stock is not None:
+            stock_results = results_by_stock[csv_path.stem]
+        else:
+            # found 会逐窗口打印，批量跑时屏蔽掉
+            with contextlib.redirect_stdout(io.StringIO()):
+                stock_results = found(stock_data, window_size=window_size, p=p)
 
         ##ranked，全部合法结果按分数升序（越小越像）
         ranked = sorted(stock_results, key=lambda r: r["score"])
